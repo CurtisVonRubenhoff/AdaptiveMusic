@@ -17,7 +17,7 @@ A Unity package for managing AI-extracted audio loops with quality-aware crossfa
 
 1. Open Unity Package Manager (`Window > Package Manager`)
 2. Click `+` and select `Add package from git URL`
-3. Enter: `https://github.com/yourusername/audio-loop-extractor.git?path=/unity-package`
+3. Enter: `https://github.com/CurtisVonRubenhoff/AdaptiveMusic.git?path=/unity-package`
 
 ### Via Manual Install
 
@@ -29,10 +29,10 @@ A Unity package for managing AI-extracted audio loops with quality-aware crossfa
 
 ### 1. Extract Audio Loops
 
-Use the [Audio Loop Extractor](https://github.com/yourusername/audio-loop-extractor) Python tool:
+Use the [Audio Loop Extractor](https://github.com/CurtisVonRubenhoff/loop_extractor) Python tool:
 
 ```bash
-python3 audio_loop_extractor.py "your_music.wav" \
+python3 loop_extractor.py "your_music.wav" \
   --min-duration 6 \
   --max-duration 30 \
   --prefer-longer \
@@ -278,13 +278,11 @@ List<LoopData> intenseLoops = track.GetLoopsWithTag("intense");
 ## Requirements
 
 - Unity 2021.3 or higher
-- Audio Loop Extractor Python tool (for creating loops)
+- LOOP_EXTRACTOR Python tool (for creating loops)
 
 ## Support
-
-- **Documentation**: See `Documentation~/` folder
-- **Issues**: [GitHub Issues](https://github.com/yourusername/audio-loop-extractor/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/audio-loop-extractor/discussions)
+- **Issues**: [GitHub Issues](https://github.com/CurtisVonRubenhoff/AdaptiveMusic/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/CurtisVonRubenhoff/AdaptiveMusic/discussions)
 
 ## License
 
@@ -292,4 +290,4 @@ MIT License - see LICENSE file for details
 
 ## Credits
 
-Part of the [Audio Loop Extractor](https://github.com/yourusername/audio-loop-extractor) project.
+Part of the [Audio Loop Extractor](https://github.com/CurtisVonRubenhoff/loop_extractor) project.
