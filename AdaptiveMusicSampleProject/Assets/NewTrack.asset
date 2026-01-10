@@ -1,0 +1,44 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bca52762b12276f57ad5b15564273c5f, type: 3}
+  m_Name: NewTrack
+  m_EditorClassIdentifier: AdaptiveMusic::AdaptiveMusic.TrackData
+  key: NewTrack
+  displayName: NewTrack
+  bpm: 120
+  loops:
+  - clip: {fileID: 8300000, guid: 071fe43faf6b6c6d69e82eef9f148cf4, type: 3}
+    index: 1
+    startTime: 48.17
+    duration: 18.65
+    quality: 0.5
+    recommendedCrossfade: 0.1
+    intensity: 0.5
+    tags: []
+  - clip: {fileID: 8300000, guid: 10cf98bcce2fb18278b5362cbfd09afc, type: 3}
+    index: 2
+    startTime: 127.62
+    duration: 6.57
+    quality: 0.41
+    recommendedCrossfade: 0.1
+    intensity: 0.5
+    tags: []
+  - clip: {fileID: 8300000, guid: bf9844b4dee9f3cbe875a546b684b13e, type: 3}
+    index: 3
+    startTime: 134.19
+    duration: 6.21
+    quality: 0.57
+    recommendedCrossfade: 0.1
+    intensity: 0.5
+    tags: []
+  defaultCrossfade: 0.1
+  tags: []

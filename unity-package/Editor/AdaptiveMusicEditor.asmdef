@@ -2,7 +2,7 @@
     "name": "AdaptiveMusic.Editor",
     "rootNamespace": "AdaptiveMusic.Editor",
     "references": [
-        "GUID:a5baed0c9693541a5bd947d336ec7659"
+        "GUID:ebf75390e570fb69ebbebaa7da37aee3"
     ],
     "includePlatforms": [
         "Editor"

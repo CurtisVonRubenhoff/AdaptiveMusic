@@ -229,7 +229,7 @@ namespace AdaptiveMusic.Editor
                         loop.intensity = EditorGUILayout.Slider(loop.intensity, 0f, 1f);
                         EditorGUILayout.EndVertical();
 
-                        EditorGUILayout.FlexibleSpace();
+                        GUILayout.FlexibleSpace();
 
                         // Play button
                         bool isThisLoopPlaying = isPlaying && playingLoopIndex == i;

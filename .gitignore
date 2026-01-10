@@ -410,3 +410,15 @@ docs/_templates/
 *.aux
 *.out
 *.toc
+
+# Unity Sample Project Stuff
+AdaptiveMusicSampleProject/Library/
+AdaptiveMusicSampleProject/obj/
+AdaptiveMusicSampleProject/Temp/
+AdaptiveMusicSampleProject/UserSettings/
+AdaptiveMusicSampleProject/ProjectSettings
+AdaptiveMusicSampleProject/*.csproj
+AdaptiveMusicSampleProject/*.sln
+
+
+
