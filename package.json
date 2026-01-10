@@ -1,0 +1,21 @@
+{
+  "name": "gs.curtiscummin.adaptivemusic",
+  "version": "1.0.0",
+  "displayName": "Curtis' Adaptive Music Controller",
+  "description": "A Unity music system designed for AI-extracted audio loops with quality-aware crossfading, dynamic loop selection, and adaptive intensity control. Works seamlessly with the Audio Loop Extractor tool.",
+  "unity": "2021.3",
+  "keywords": [
+    "audio",
+    "music",
+    "adaptive",
+    "loop",
+    "crossfade",
+    "soundtrack",
+    "game audio"
+  ],
+  "author": {
+    "name": "Loop Extractor Contributors",
+    "url": "https://github.com/CurtisVonRubenhoff/loop_extractor"
+  },
+  "dependencies": {}
+}
