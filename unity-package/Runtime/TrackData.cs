@@ -5,97 +5,88 @@ using System.Linq;
 namespace AdaptiveMusic
 {
     /// <summary>
-    /// Represents a complete track with all its extracted loops
+    /// ScriptableObject representing a complete music track with all its loops.
+    /// Supports both legacy and MAGI-style features.
     /// </summary>
-    [CreateAssetMenu(fileName = "New Track", menuName = "Adaptive Music/Track Data")]
+    [CreateAssetMenu(fileName = "NewTrack", menuName = "Adaptive Music/Track Data")]
     public class TrackData : ScriptableObject
     {
         [Header("Track Info")]
         [Tooltip("Unique identifier for this track")]
-        public string key;
-        
-        [Tooltip("Display name")]
+        public string trackKey;
+
+        [Tooltip("Display name for this track")]
         public string displayName;
-        
-        [Tooltip("Tempo in BPM (from audio analysis)")]
-        public float bpm = 120f;
-        
+
+        [Tooltip("Optional tags for categorization")]
+        public List<string> tags = new List<string>();
+
         [Header("Loops")]
-        [Tooltip("All loops extracted from this track")]
+        [Tooltip("All loops that belong to this track")]
         public List<LoopData> loops = new List<LoopData>();
-        
-        [Header("Playback Settings")]
-        [Tooltip("Default crossfade duration (can be overridden per-loop)")]
-        public float defaultCrossfade = 0.1f;
-        
-        [Tooltip("Tags for categorizing the track (action, ambient, menu, etc.)")]
-        public string[] tags;
+
+        [Header("MAGI Configuration")]
+        [Tooltip("Default BPM for all loops (can be overridden per-loop)")]
+        public float defaultBPM = 120f;
+
+        [Tooltip("Default time signature (beats per bar)")]
+        public int beatsPerBar = 4;
+
+        // ==================== LOOP SELECTION ====================
 
         /// <summary>
         /// Get a random loop from this track
         /// </summary>
         public LoopData GetRandomLoop()
         {
-            if (loops.Count == 0) return null;
+            if (loops == null || loops.Count == 0)
+                return null;
+
             return loops[Random.Range(0, loops.Count)];
         }
 
         /// <summary>
-        /// Get a random loop, excluding a specific one
-        /// </summary>
-        public LoopData GetRandomLoopExcluding(LoopData exclude)
-        {
-            if (loops.Count <= 1) return null;
-            
-            List<LoopData> available = loops.Where(l => l != exclude).ToList();
-            if (available.Count == 0) return null;
-            
-            return available[Random.Range(0, available.Count)];
-        }
-
-        /// <summary>
-        /// Get loop by index
+        /// Get a loop by index
         /// </summary>
         public LoopData GetLoopByIndex(int index)
         {
-            if (index < 0 || index >= loops.Count) return null;
+            if (loops == null || index < 0 || index >= loops.Count)
+                return null;
+
             return loops[index];
         }
 
         /// <summary>
-        /// Get all loops with a specific tag
+        /// Get all loops that have a specific tag
         /// </summary>
         public List<LoopData> GetLoopsWithTag(string tag)
         {
+            if (loops == null)
+                return new List<LoopData>();
+
             return loops.Where(l => l.tags != null && l.tags.Contains(tag)).ToList();
         }
 
         /// <summary>
-        /// Get loop closest to target quality score
+        /// Get the loop with quality closest to the target value
         /// </summary>
         public LoopData GetLoopClosestToQuality(float targetQuality)
         {
-            if (loops.Count == 0) return null;
-            
-            return loops.OrderBy(l => Mathf.Abs(l.quality - targetQuality)).First();
+            if (loops == null || loops.Count == 0)
+                return null;
+
+            return loops.OrderBy(l => Mathf.Abs(l.quality - targetQuality)).FirstOrDefault();
         }
 
         /// <summary>
-        /// Get loop closest to target intensity
+        /// Get the loop with intensity closest to the target value
         /// </summary>
         public LoopData GetLoopClosestToIntensity(float targetIntensity)
         {
-            if (loops.Count == 0) return null;
-            
-            return loops.OrderBy(l => Mathf.Abs(l.intensity - targetIntensity)).First();
-        }
+            if (loops == null || loops.Count == 0)
+                return null;
 
-        /// <summary>
-        /// Get loops within a quality range
-        /// </summary>
-        public List<LoopData> GetLoopsInQualityRange(float minQuality, float maxQuality)
-        {
-            return loops.Where(l => l.quality >= minQuality && l.quality <= maxQuality).ToList();
+            return loops.OrderBy(l => Mathf.Abs(l.intensity - targetIntensity)).FirstOrDefault();
         }
 
         /// <summary>
@@ -103,60 +94,122 @@ namespace AdaptiveMusic
         /// </summary>
         public LoopData GetBestQualityLoop()
         {
-            if (loops.Count == 0) return null;
-            return loops.OrderByDescending(l => l.quality).First();
+            if (loops == null || loops.Count == 0)
+                return null;
+
+            return loops.OrderByDescending(l => l.quality).FirstOrDefault();
         }
 
         /// <summary>
-        /// Get loops sorted by their original position in track
+        /// Get loops within an intensity range
         /// </summary>
-        public List<LoopData> GetLoopsByPosition()
+        public List<LoopData> GetLoopsInIntensityRange(float minIntensity, float maxIntensity)
         {
-            return loops.OrderBy(l => l.startTime).ToList();
+            if (loops == null)
+                return new List<LoopData>();
+
+            return loops.Where(l => l.intensity >= minIntensity && l.intensity <= maxIntensity).ToList();
         }
 
+        // ==================== MAGI UTILITIES ====================
+
         /// <summary>
-        /// Add a loop to this track
+        /// Auto-generate sync points for all loops in this track
         /// </summary>
-        public void AddLoop(LoopData loop)
+        public void GenerateAllSyncPoints(bool useBeats = false)
         {
-            if (loop != null && !loops.Contains(loop))
+            if (loops == null)
+                return;
+
+            foreach (var loop in loops)
             {
-                loops.Add(loop);
+                // Set default BPM if not set
+                if (loop.bpm <= 0)
+                    loop.bpm = defaultBPM;
+
+                // Generate sync points
+                if (useBeats)
+                    loop.GenerateSyncPointsOnBeats();
+                else
+                    loop.GenerateSyncPointsOnBars();
+            }
+
+            Debug.Log($"Generated sync points for {loops.Count} loops in track '{displayName}'");
+        }
+
+        /// <summary>
+        /// Validate all loops in this track
+        /// </summary>
+        public bool ValidateAllLoops(out List<string> errors)
+        {
+            errors = new List<string>();
+
+            if (loops == null || loops.Count == 0)
+            {
+                errors.Add("Track has no loops");
+                return false;
+            }
+
+            for (int i = 0; i < loops.Count; i++)
+            {
+                string error;
+                if (!loops[i].Validate(out error))
+                {
+                    errors.Add($"Loop {i}: {error}");
+                }
+            }
+
+            return errors.Count == 0;
+        }
+
+        // ==================== EDITOR UTILITIES ====================
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Sort loops by intensity (for easier browsing in editor)
+        /// </summary>
+        [ContextMenu("Sort Loops by Intensity")]
+        public void SortLoopsByIntensity()
+        {
+            if (loops != null)
+            {
+                loops = loops.OrderBy(l => l.intensity).ToList();
+                UnityEditor.EditorUtility.SetDirty(this);
             }
         }
 
         /// <summary>
-        /// Auto-populate loops from a folder of audio files
-        /// Call this from editor script or inspector button
+        /// Sort loops by quality
         /// </summary>
-        public void LoadLoopsFromClips(AudioClip[] clips)
+        [ContextMenu("Sort Loops by Quality")]
+        public void SortLoopsByQuality()
         {
-            loops.Clear();
-            
-            foreach (AudioClip clip in clips)
+            if (loops != null)
             {
-                if (clip == null) continue;
-                
-                // Parse metadata from filename
-                LoopData loop = LoopData.FromFilename(clip, clip.name);
-                loop.recommendedCrossfade = defaultCrossfade;
-                loops.Add(loop);
+                loops = loops.OrderByDescending(l => l.quality).ToList();
+                UnityEditor.EditorUtility.SetDirty(this);
             }
-            
-            // Sort by start time
-            loops = loops.OrderBy(l => l.startTime).ToList();
-            
-            Debug.Log($"Loaded {loops.Count} loops for track '{displayName}'");
         }
 
-        private void OnValidate()
+        /// <summary>
+        /// Generate sync points for all loops
+        /// </summary>
+        [ContextMenu("Generate Sync Points (Bars)")]
+        public void GenerateSyncPointsOnBars()
         {
-            // Ensure loops are sorted
-            if (loops.Count > 1)
-            {
-                loops = loops.OrderBy(l => l.index).ToList();
-            }
+            GenerateAllSyncPoints(useBeats: false);
+            UnityEditor.EditorUtility.SetDirty(this);
         }
+
+        /// <summary>
+        /// Generate sync points on beats
+        /// </summary>
+        [ContextMenu("Generate Sync Points (Beats)")]
+        public void GenerateSyncPointsOnBeats()
+        {
+            GenerateAllSyncPoints(useBeats: true);
+            UnityEditor.EditorUtility.SetDirty(this);
+        }
+#endif
     }
 }

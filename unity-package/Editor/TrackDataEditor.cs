@@ -1,366 +1,767 @@
+using UnityEngine;
+using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
-using UnityEditor;
-using UnityEngine;
+using System.Text.RegularExpressions;
 
 namespace AdaptiveMusic.Editor
 {
+    /// <summary>
+    /// Enhanced Track Data Editor with stem detection and automatic grouping.
+    /// Works with loop_extractor output format.
+    /// </summary>
     [CustomEditor(typeof(TrackData))]
     public class TrackDataEditor : UnityEditor.Editor
     {
-        private SerializedProperty keyProperty;
-        private SerializedProperty displayNameProperty;
-        private SerializedProperty bpmProperty;
-        private SerializedProperty loopsProperty;
-        private SerializedProperty defaultCrossfadeProperty;
-        private SerializedProperty tagsProperty;
+        private TrackData track;
+        private Vector2 loopScrollPos;
+        private bool showMAGITools = true;
+        private bool showStemTools = true;
+        private int selectedLoopIndex = -1;
 
-        private List<double> tapTimes = new List<double>();
-        private AudioSource previewSource;
-        private bool isPlaying = false;
-        private int playingLoopIndex = -1;
-        private double lastTapTime = 0;
-        private const int minTaps = 4;
-        private const int maxTaps = 16;
-        private Vector2 loopsScrollPosition;
-        private bool showBPMTools = true;
-        private bool showLoopsList = true;
+        // Stem detection
+        private Dictionary<int, List<LoopData>> groupedLoops = new Dictionary<int, List<LoopData>>();
+        private bool hasUngroupedStems = false;
+
+        // Sorting
+        private enum SortMode { Index, Quality, Intensity, Duration, StemCount }
+        private SortMode currentSortMode = SortMode.Index;
 
         void OnEnable()
         {
-            keyProperty = serializedObject.FindProperty("key");
-            displayNameProperty = serializedObject.FindProperty("displayName");
-            bpmProperty = serializedObject.FindProperty("bpm");
-            loopsProperty = serializedObject.FindProperty("loops");
-            defaultCrossfadeProperty = serializedObject.FindProperty("defaultCrossfade");
-            tagsProperty = serializedObject.FindProperty("tags");
-
-            // Create preview audio source
-            GameObject previewObj = GameObject.Find("_TrackDataPreview");
-            if (previewObj == null)
-            {
-                previewObj = new GameObject("_TrackDataPreview");
-                previewObj.hideFlags = HideFlags.HideAndDontSave;
-                previewSource = previewObj.AddComponent<AudioSource>();
-                previewSource.playOnAwake = false;
-            }
-            else
-            {
-                previewSource = previewObj.GetComponent<AudioSource>();
-            }
-        }
-
-        void OnDisable()
-        {
-            StopPreview();
+            track = (TrackData)target;
+            AnalyzeStems();
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
-            TrackData track = (TrackData)target;
 
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Track Data", EditorStyles.boldLabel);
+            DrawHeader();
             EditorGUILayout.Space();
 
-            // Basic Info
-            EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("Track Information", EditorStyles.boldLabel);
-            
-            EditorGUILayout.PropertyField(keyProperty, new GUIContent("Key", "Unique identifier for this track"));
-            EditorGUILayout.PropertyField(displayNameProperty, new GUIContent("Display Name", "Human-readable name"));
-            EditorGUILayout.PropertyField(tagsProperty, new GUIContent("Tags", "Tags for organization (action, ambient, menu, etc.)"));
-            
-            EditorGUILayout.EndVertical();
+            DrawBasicInfo();
             EditorGUILayout.Space();
 
-            // BPM and Timing
-            EditorGUILayout.BeginVertical("box");
-            showBPMTools = EditorGUILayout.Foldout(showBPMTools, "BPM & Timing", true, EditorStyles.foldoutHeader);
-            
-            if (showBPMTools)
-            {
-                EditorGUI.indentLevel++;
-                
-                EditorGUILayout.PropertyField(bpmProperty, new GUIContent("BPM", "Beats per minute"));
-                EditorGUILayout.PropertyField(defaultCrossfadeProperty, new GUIContent("Default Crossfade", "Default crossfade duration in seconds"));
-
-                EditorGUILayout.Space(5);
-
-                // Tap Tempo
-                EditorGUILayout.BeginVertical("helpbox");
-                EditorGUILayout.LabelField("Tap Tempo Tool", EditorStyles.boldLabel);
-                EditorGUILayout.HelpBox("Play a loop and tap the button on each beat to detect BPM.", MessageType.Info);
-
-                // Play button for first loop
-                if (track.loops.Count > 0 && track.loops[0] != null && track.loops[0].clip != null)
-                {
-                    EditorGUILayout.BeginHorizontal();
-                    
-                    bool isPreviewPlaying = isPlaying && playingLoopIndex == 0;
-                    string playButtonLabel = isPreviewPlaying ? "⬛ Stop Preview" : "▶ Play First Loop";
-                    
-                    if (GUILayout.Button(playButtonLabel, GUILayout.Height(30)))
-                    {
-                        if (isPreviewPlaying)
-                            StopPreview();
-                        else
-                            PlayPreview(track.loops[0].clip, 0);
-                    }
-
-                    EditorGUILayout.EndHorizontal();
-                }
-
-                EditorGUILayout.Space(3);
-
-                // Tap button
-                GUI.backgroundColor = Color.cyan;
-                if (GUILayout.Button("TAP ON BEAT", GUILayout.Height(40)))
-                {
-                    RecordTap();
-                }
-                GUI.backgroundColor = Color.white;
-
-                // Display tap info
-                if (tapTimes.Count > 0)
-                {
-                    EditorGUILayout.Space(5);
-                    EditorGUILayout.LabelField($"Taps recorded: {tapTimes.Count} / {maxTaps}", EditorStyles.miniLabel);
-
-                    if (tapTimes.Count >= minTaps)
-                    {
-                        float calculatedBPM = CalculateBPM();
-                        EditorGUILayout.LabelField($"Detected BPM: {calculatedBPM:F1}", EditorStyles.boldLabel);
-
-                        EditorGUILayout.BeginHorizontal();
-                        GUI.backgroundColor = Color.green;
-                        if (GUILayout.Button("✓ Apply BPM", GUILayout.Height(30)))
-                        {
-                            bpmProperty.floatValue = calculatedBPM;
-                            serializedObject.ApplyModifiedProperties();
-                            ResetTaps();
-                            EditorUtility.DisplayDialog("BPM Applied", $"BPM set to {calculatedBPM:F1}", "OK");
-                        }
-                        GUI.backgroundColor = Color.white;
-
-                        if (GUILayout.Button("Reset", GUILayout.Height(30), GUILayout.Width(80)))
-                        {
-                            ResetTaps();
-                        }
-                        EditorGUILayout.EndHorizontal();
-                    }
-                    else
-                    {
-                        EditorGUILayout.HelpBox($"Tap {minTaps - tapTimes.Count} more time(s) to calculate BPM", MessageType.Info);
-                    }
-                }
-
-                EditorGUILayout.EndVertical();
-                
-                EditorGUI.indentLevel--;
-            }
-            
-            EditorGUILayout.EndVertical();
+            DrawStemTools();
             EditorGUILayout.Space();
 
-            // Loops
-            EditorGUILayout.BeginVertical("box");
-            showLoopsList = EditorGUILayout.Foldout(showLoopsList, $"Loops ({track.loops.Count})", true, EditorStyles.foldoutHeader);
-            
-            if (showLoopsList)
-            {
-                EditorGUI.indentLevel++;
+            DrawMAGITools();
+            EditorGUILayout.Space();
 
-                if (track.loops.Count == 0)
-                {
-                    EditorGUILayout.HelpBox("No loops added yet. Use Tools > Adaptive Music > Loop Importer to import extracted loops.", MessageType.Info);
-                }
-                else
-                {
-                    // Statistics
-                    float avgQuality = track.loops.Average(l => l.quality);
-                    float totalDuration = track.loops.Sum(l => l.duration);
-                    LoopData bestLoop = track.GetBestQualityLoop();
-
-                    EditorGUILayout.BeginVertical("helpbox");
-                    EditorGUILayout.LabelField("Statistics", EditorStyles.boldLabel);
-                    EditorGUILayout.LabelField($"Total Duration: {totalDuration:F1}s", EditorStyles.miniLabel);
-                    EditorGUILayout.LabelField($"Average Quality: {avgQuality:F2}", EditorStyles.miniLabel);
-                    EditorGUILayout.LabelField($"Best Quality: {bestLoop.quality:F2} (Loop {bestLoop.index + 1})", EditorStyles.miniLabel);
-                    EditorGUILayout.EndVertical();
-
-                    EditorGUILayout.Space(5);
-
-                    // Loop list with scroll
-                    loopsScrollPosition = EditorGUILayout.BeginScrollView(loopsScrollPosition, GUILayout.MaxHeight(300));
-
-                    for (int i = 0; i < track.loops.Count; i++)
-                    {
-                        LoopData loop = track.loops[i];
-                        if (loop == null) continue;
-
-                        EditorGUILayout.BeginHorizontal("box");
-
-                        // Loop info
-                        EditorGUILayout.BeginVertical(GUILayout.Width(80));
-                        EditorGUILayout.LabelField($"Loop {loop.index + 1}", EditorStyles.boldLabel);
-                        EditorGUILayout.LabelField($"{loop.duration:F1}s", EditorStyles.miniLabel);
-                        EditorGUILayout.EndVertical();
-
-                        // Quality indicator
-                        EditorGUILayout.BeginVertical(GUILayout.Width(60));
-                        Color qualityColor = GetQualityColor(loop.quality);
-                        GUI.contentColor = qualityColor;
-                        EditorGUILayout.LabelField("Quality", EditorStyles.miniLabel);
-                        EditorGUILayout.LabelField($"{loop.quality:F2}", EditorStyles.boldLabel);
-                        GUI.contentColor = Color.white;
-                        EditorGUILayout.EndVertical();
-
-                        // Timing info
-                        EditorGUILayout.BeginVertical(GUILayout.Width(100));
-                        EditorGUILayout.LabelField($"Start: {loop.startTime:F1}s", EditorStyles.miniLabel);
-                        EditorGUILayout.LabelField($"Fade: {loop.recommendedCrossfade:F2}s", EditorStyles.miniLabel);
-                        EditorGUILayout.EndVertical();
-
-                        // Intensity
-                        EditorGUILayout.BeginVertical(GUILayout.Width(80));
-                        EditorGUILayout.LabelField("Intensity", EditorStyles.miniLabel);
-                        loop.intensity = EditorGUILayout.Slider(loop.intensity, 0f, 1f);
-                        EditorGUILayout.EndVertical();
-
-                        GUILayout.FlexibleSpace();
-
-                        // Play button
-                        bool isThisLoopPlaying = isPlaying && playingLoopIndex == i;
-                        string playLabel = isThisLoopPlaying ? "⬛" : "▶";
-                        if (GUILayout.Button(playLabel, GUILayout.Width(30), GUILayout.Height(40)))
-                        {
-                            if (isThisLoopPlaying)
-                                StopPreview();
-                            else
-                                PlayPreview(loop.clip, i);
-                        }
-
-                        EditorGUILayout.EndHorizontal();
-                        
-                        // Tags for this loop
-                        if (loop.tags != null && loop.tags.Length > 0)
-                        {
-                            EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField("Tags:", EditorStyles.miniLabel, GUILayout.Width(40));
-                            EditorGUILayout.LabelField(string.Join(", ", loop.tags), EditorStyles.miniLabel);
-                            EditorGUILayout.EndHorizontal();
-                        }
-                    }
-
-                    EditorGUILayout.EndScrollView();
-                }
-
-                EditorGUILayout.Space(5);
-
-                // Import button
-                if (GUILayout.Button("Open Loop Importer", GUILayout.Height(30)))
-                {
-                    LoopImporter.ShowWindow();
-                }
-
-                EditorGUI.indentLevel--;
-            }
-            
-            EditorGUILayout.EndVertical();
+            DrawLoopList();
 
             serializedObject.ApplyModifiedProperties();
+
+            if (GUI.changed)
+            {
+                EditorUtility.SetDirty(track);
+            }
         }
 
-        Color GetQualityColor(float quality)
+        // ==================== HEADER ====================
+
+        void DrawHeader()
         {
-            if (quality >= 0.8f)
-                return new Color(0.2f, 1f, 0.2f); // Green
-            else if (quality >= 0.6f)
-                return new Color(1f, 0.8f, 0f); // Yellow
-            else if (quality >= 0.4f)
-                return new Color(1f, 0.5f, 0f); // Orange
+            GUIStyle headerStyle = new GUIStyle(EditorStyles.boldLabel);
+            headerStyle.fontSize = 16;
+            EditorGUILayout.LabelField($"Track: {track.displayName}", headerStyle);
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"Loops: {track.loops?.Count ?? 0}", EditorStyles.miniLabel);
+            
+            if (hasUngroupedStems)
+            {
+                GUIStyle warningStyle = new GUIStyle(EditorStyles.miniLabel);
+                warningStyle.normal.textColor = Color.yellow;
+                EditorGUILayout.LabelField("⚠ Ungrouped stems detected!", warningStyle);
+            }
+            
+            EditorGUILayout.EndHorizontal();
+        }
+
+        // ==================== BASIC INFO ====================
+
+        void DrawBasicInfo()
+        {
+            EditorGUILayout.LabelField("Track Settings", EditorStyles.boldLabel);
+
+            EditorGUI.BeginChangeCheck();
+            
+            track.trackKey = EditorGUILayout.TextField("Track Key", track.trackKey);
+            track.displayName = EditorGUILayout.TextField("Display Name", track.displayName);
+            track.defaultBPM = EditorGUILayout.FloatField("Default BPM", track.defaultBPM);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                EditorUtility.SetDirty(track);
+            }
+        }
+
+        // ==================== STEM TOOLS ====================
+
+        void DrawStemTools()
+        {
+            showStemTools = EditorGUILayout.Foldout(showStemTools, "🎛️ Stem Tools", true);
+            
+            if (!showStemTools)
+                return;
+
+            EditorGUI.indentLevel++;
+
+            // Statistics
+            int totalStems = 0;
+            int loopsWithStems = 0;
+            
+            if (track.loops != null)
+            {
+                foreach (var loop in track.loops)
+                {
+                    if (loop.useStems && loop.stems != null)
+                    {
+                        totalStems += loop.stems.Count;
+                        loopsWithStems++;
+                    }
+                }
+            }
+
+            EditorGUILayout.LabelField($"Loops with stems: {loopsWithStems} / {track.loops?.Count ?? 0}");
+            EditorGUILayout.LabelField($"Total stems: {totalStems}");
+
+            EditorGUILayout.Space();
+
+            // Auto-Group Stems button
+            if (hasUngroupedStems)
+            {
+                EditorGUILayout.HelpBox(
+                    "Detected individual stem clips that could be grouped into multi-stem loops.\n" +
+                    "Click 'Auto-Group Stems by Filename' to combine them.",
+                    MessageType.Warning
+                );
+
+                if (GUILayout.Button("🔄 Auto-Group Stems by Filename"))
+                {
+                    AutoGroupStems();
+                }
+            }
             else
-                return new Color(1f, 0.2f, 0.2f); // Red
-        }
-
-        void PlayPreview(AudioClip clip, int index)
-        {
-            if (previewSource == null || clip == null) return;
-
-            StopPreview();
-            playingLoopIndex = index;
-            previewSource.clip = clip;
-            previewSource.loop = true;
-            previewSource.Play();
-            isPlaying = true;
-
-            Repaint();
-        }
-
-        void StopPreview()
-        {
-            if (previewSource != null && previewSource.isPlaying)
             {
-                previewSource.Stop();
+                EditorGUILayout.HelpBox("No ungrouped stems detected. Loops are properly configured.", MessageType.Info);
             }
 
-            isPlaying = false;
-            playingLoopIndex = -1;
-            Repaint();
-        }
+            EditorGUILayout.Space();
 
-        void RecordTap()
-        {
-            double currentTime = EditorApplication.timeSinceStartup;
-
-            // If it's been more than 3 seconds since last tap, reset
-            if (tapTimes.Count > 0 && currentTime - lastTapTime > 3.0)
+            // Validate Stems button
+            if (GUILayout.Button("🔍 Validate All Stems"))
             {
-                ResetTaps();
+                ValidateAllStems();
             }
 
-            tapTimes.Add(currentTime);
-            lastTapTime = currentTime;
-
-            // Limit number of taps
-            if (tapTimes.Count > maxTaps)
+            // Re-Detect Stems button
+            if (GUILayout.Button("🔄 Re-Analyze Stem Structure"))
             {
-                tapTimes.RemoveAt(0);
+                AnalyzeStems();
             }
 
-            Repaint();
+            EditorGUI.indentLevel--;
         }
 
-        float CalculateBPM()
-        {
-            if (tapTimes.Count < 2) return 0f;
+        // ==================== MAGI TOOLS ====================
 
-            // Calculate intervals between taps
-            List<double> intervals = new List<double>();
-            for (int i = 1; i < tapTimes.Count; i++)
+        void DrawMAGITools()
+        {
+            showMAGITools = EditorGUILayout.Foldout(showMAGITools, "⚡ MAGI Tools", true);
+            
+            if (!showMAGITools)
+                return;
+
+            EditorGUI.indentLevel++;
+
+            // Statistics
+            int loopsWithSyncPoints = 0;
+            int totalSyncPoints = 0;
+
+            if (track.loops != null)
             {
-                intervals.Add(tapTimes[i] - tapTimes[i - 1]);
+                foreach (var loop in track.loops)
+                {
+                    if (loop.HasSyncPoints)
+                    {
+                        loopsWithSyncPoints++;
+                        totalSyncPoints += loop.exitSyncPoints.Count;
+                    }
+                }
             }
 
-            // Average interval
-            double avgInterval = intervals.Average();
+            EditorGUILayout.LabelField($"Loops with sync points: {loopsWithSyncPoints} / {track.loops?.Count ?? 0}");
+            EditorGUILayout.LabelField($"Total sync points: {totalSyncPoints}");
 
-            // Convert to BPM (60 seconds / average interval)
-            float bpm = (float)(60.0 / avgInterval);
+            EditorGUILayout.Space();
 
-            // Round to nearest 0.5
-            bpm = Mathf.Round(bpm * 2f) / 2f;
+            // Generate all sync points
+            if (GUILayout.Button("⚡ Generate All Sync Points"))
+            {
+                GenerateAllSyncPoints();
+            }
 
-            return bpm;
+            // Clear all sync points
+            if (GUILayout.Button("Clear All Sync Points"))
+            {
+                ClearAllSyncPoints();
+            }
+
+            EditorGUI.indentLevel--;
         }
 
-        void ResetTaps()
+        // ==================== LOOP LIST ====================
+
+        void DrawLoopList()
         {
-            tapTimes.Clear();
-            lastTapTime = 0;
-            Repaint();
+            EditorGUILayout.LabelField("Loops", EditorStyles.boldLabel);
+
+            // Sorting controls
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Sort by:", GUILayout.Width(60));
+            
+            if (GUILayout.Button("Index", currentSortMode == SortMode.Index ? EditorStyles.toolbarButton : EditorStyles.miniButton))
+            {
+                currentSortMode = SortMode.Index;
+            }
+            if (GUILayout.Button("Quality", currentSortMode == SortMode.Quality ? EditorStyles.toolbarButton : EditorStyles.miniButton))
+            {
+                currentSortMode = SortMode.Quality;
+                SortLoops();
+            }
+            if (GUILayout.Button("Intensity", currentSortMode == SortMode.Intensity ? EditorStyles.toolbarButton : EditorStyles.miniButton))
+            {
+                currentSortMode = SortMode.Intensity;
+                SortLoops();
+            }
+            if (GUILayout.Button("Duration", currentSortMode == SortMode.Duration ? EditorStyles.toolbarButton : EditorStyles.miniButton))
+            {
+                currentSortMode = SortMode.Duration;
+                SortLoops();
+            }
+            if (GUILayout.Button("Stems", currentSortMode == SortMode.StemCount ? EditorStyles.toolbarButton : EditorStyles.miniButton))
+            {
+                currentSortMode = SortMode.StemCount;
+                SortLoops();
+            }
+            
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space();
+
+            // Loop list
+            loopScrollPos = EditorGUILayout.BeginScrollView(loopScrollPos, GUILayout.Height(300));
+
+            if (track.loops != null && track.loops.Count > 0)
+            {
+                for (int i = 0; i < track.loops.Count; i++)
+                {
+                    DrawLoopCard(i);
+                }
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("No loops. Use the Loop Importer to add loops.", MessageType.Info);
+            }
+
+            EditorGUILayout.EndScrollView();
+
+            // Add/Remove buttons
+            EditorGUILayout.BeginHorizontal();
+            
+            if (GUILayout.Button("+ Add Loop"))
+            {
+                Undo.RecordObject(track, "Add Loop");
+                track.loops.Add(new LoopData());
+                EditorUtility.SetDirty(track);
+            }
+
+            GUI.enabled = selectedLoopIndex >= 0 && selectedLoopIndex < track.loops.Count;
+            if (GUILayout.Button("- Remove Selected"))
+            {
+                Undo.RecordObject(track, "Remove Loop");
+                track.loops.RemoveAt(selectedLoopIndex);
+                selectedLoopIndex = -1;
+                EditorUtility.SetDirty(track);
+            }
+            GUI.enabled = true;
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        void DrawLoopCard(int index)
+        {
+            var loop = track.loops[index];
+            bool isSelected = selectedLoopIndex == index;
+
+            // Card background
+            GUIStyle cardStyle = new GUIStyle(EditorStyles.helpBox);
+            if (isSelected)
+            {
+                cardStyle.normal.background = MakeTex(2, 2, new Color(0.3f, 0.5f, 0.8f, 0.3f));
+            }
+
+            EditorGUILayout.BeginVertical(cardStyle);
+
+            // Header
+            EditorGUILayout.BeginHorizontal();
+
+            // Selection toggle
+            if (GUILayout.Toggle(isSelected, "", GUILayout.Width(20)) != isSelected)
+            {
+                selectedLoopIndex = isSelected ? -1 : index;
+            }
+
+            // Loop info
+            string clipName = loop.useStems && loop.stems != null && loop.stems.Count > 0
+                ? $"Loop #{index:D2} (Multi-stem)"
+                : loop.clip != null 
+                    ? loop.clip.name 
+                    : $"Loop #{index:D2} (Empty)";
+
+            EditorGUILayout.LabelField($"{index:D2}", GUILayout.Width(30));
+            EditorGUILayout.LabelField(clipName, EditorStyles.boldLabel);
+
+            // Status indicators
+            if (loop.HasSyncPoints)
+            {
+                GUIStyle syncStyle = new GUIStyle(EditorStyles.miniLabel);
+                syncStyle.normal.textColor = Color.green;
+                EditorGUILayout.LabelField($"⚡{loop.exitSyncPoints.Count}", syncStyle, GUILayout.Width(30));
+            }
+
+            if (loop.useStems)
+            {
+                GUIStyle stemStyle = new GUIStyle(EditorStyles.miniLabel);
+                stemStyle.normal.textColor = Color.cyan;
+                EditorGUILayout.LabelField($"🎛️{loop.stems?.Count ?? 0}", stemStyle, GUILayout.Width(30));
+            }
+
+            EditorGUILayout.EndHorizontal();
+
+            // Stats
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"Q: {loop.quality:F2}", EditorStyles.miniLabel, GUILayout.Width(60));
+            EditorGUILayout.LabelField($"I: {loop.intensity:F2}", EditorStyles.miniLabel, GUILayout.Width(60));
+            EditorGUILayout.LabelField($"BPM: {loop.bpm:F0}", EditorStyles.miniLabel, GUILayout.Width(70));
+            EditorGUILayout.LabelField($"Duration: {loop.Duration:F1}s", EditorStyles.miniLabel);
+            EditorGUILayout.EndHorizontal();
+
+            // Stem list (if multi-stem)
+            if (loop.useStems && loop.stems != null && loop.stems.Count > 0)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField("Stems:", EditorStyles.miniLabel);
+                foreach (var stem in loop.stems)
+                {
+                    if (stem != null)
+                    {
+                        EditorGUILayout.LabelField($"  • {stem.name}", EditorStyles.miniLabel);
+                    }
+                }
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.Space();
+        }
+
+        // ==================== STEM ANALYSIS ====================
+
+        void AnalyzeStems()
+        {
+            groupedLoops.Clear();
+            hasUngroupedStems = false;
+
+            if (track.loops == null || track.loops.Count == 0)
+                return;
+
+            // Parse all loops to detect potential stem groups
+            Dictionary<int, List<LoopData>> potentialGroups = new Dictionary<int, List<LoopData>>();
+
+            foreach (var loop in track.loops)
+            {
+                // Skip if already using stems
+                if (loop.useStems && loop.stems != null && loop.stems.Count > 1)
+                    continue;
+
+                // Try to parse clip name
+                if (loop.clip != null)
+                {
+                    var stemInfo = ParseStemFilename(loop.clip.name);
+                    
+                    if (stemInfo.isValid)
+                    {
+                        if (!potentialGroups.ContainsKey(stemInfo.loopNumber))
+                        {
+                            potentialGroups[stemInfo.loopNumber] = new List<LoopData>();
+                        }
+                        potentialGroups[stemInfo.loopNumber].Add(loop);
+                    }
+                }
+            }
+
+            // Check if any groups have multiple clips (ungrouped stems)
+            foreach (var group in potentialGroups.Values)
+            {
+                if (group.Count > 1)
+                {
+                    hasUngroupedStems = true;
+                    break;
+                }
+            }
+
+            groupedLoops = potentialGroups;
+
+            Debug.Log($"Stem Analysis: Found {potentialGroups.Count} potential groups, ungrouped stems: {hasUngroupedStems}");
+        }
+
+        struct StemInfo
+        {
+            public bool isValid;
+            public int trackNumber;
+            public string trackName;
+            public int loopNumber;
+            public float startTime;
+            public float duration;
+            public string stemName;
+        }
+
+        StemInfo ParseStemFilename(string filename)
+        {
+            var info = new StemInfo { isValid = false };
+
+            // Find "_loop_" separator
+            int loopIndex = filename.IndexOf("_loop_");
+            if (loopIndex < 0)
+                return info;
+
+            // Everything before "_loop_"
+            string beforeLoop = filename.Substring(0, loopIndex);
+            
+            // Everything after "_loop_" should be: "NN_XX.XXs_XX.XXs_stemname"
+            string afterLoop = filename.Substring(loopIndex + 6);
+            
+            // Parse after section
+            var afterMatch = Regex.Match(afterLoop, @"^(\d+)_([\d.]+)s_([\d.]+)s_(.+)$");
+            
+            if (!afterMatch.Success)
+                return info;
+            
+            info.loopNumber = int.Parse(afterMatch.Groups[1].Value);
+            info.startTime = float.Parse(afterMatch.Groups[2].Value);
+            info.duration = float.Parse(afterMatch.Groups[3].Value);
+            info.stemName = afterMatch.Groups[4].Value;
+            
+            // Parse before section for track number and name
+            var beforeMatch = Regex.Match(beforeLoop, @"^(\d+)\.?\s*(.*)$");
+            
+            if (beforeMatch.Success)
+            {
+                info.trackNumber = int.Parse(beforeMatch.Groups[1].Value);
+                info.trackName = beforeMatch.Groups[2].Value.Trim();
+                info.isValid = true;
+            }
+            else
+            {
+                info.trackNumber = 0;
+                info.trackName = beforeLoop.Trim();
+                info.isValid = true;
+            }
+
+            return info;
+        }
+
+        // ==================== AUTO-GROUP STEMS ====================
+
+        void AutoGroupStems()
+        {
+            if (!hasUngroupedStems)
+            {
+                EditorUtility.DisplayDialog("Info", "No ungrouped stems detected.", "OK");
+                return;
+            }
+
+            bool confirmed = EditorUtility.DisplayDialog(
+                "Auto-Group Stems",
+                $"This will group {groupedLoops.Values.Sum(g => g.Count)} individual clips into {groupedLoops.Count} multi-stem loops.\n\n" +
+                "The original individual loops will be removed and replaced with grouped loops.\n\n" +
+                "Continue?",
+                "Group Stems",
+                "Cancel"
+            );
+
+            if (!confirmed)
+                return;
+
+            Undo.RecordObject(track, "Auto-Group Stems");
+
+            List<LoopData> newLoops = new List<LoopData>();
+            HashSet<LoopData> processedLoops = new HashSet<LoopData>();
+
+            // Create grouped loops
+            foreach (var kvp in groupedLoops.OrderBy(k => k.Key))
+            {
+                int loopNumber = kvp.Key;
+                var loopGroup = kvp.Value;
+
+                if (loopGroup.Count < 2)
+                {
+                    // Single clip, keep as-is
+                    if (loopGroup.Count == 1 && !processedLoops.Contains(loopGroup[0]))
+                    {
+                        newLoops.Add(loopGroup[0]);
+                        processedLoops.Add(loopGroup[0]);
+                    }
+                    continue;
+                }
+
+                // Create multi-stem loop
+                LoopData groupedLoop = new LoopData
+                {
+                    useStems = true,
+                    stems = loopGroup.Select(l => l.clip).OrderBy(c => GetStemPriority(c.name)).ToList(),
+                    clip = null,
+                    bpm = loopGroup[0].bpm,
+                    quality = loopGroup[0].quality,
+                    intensity = loopGroup[0].intensity,
+                    exitSyncPoints = loopGroup[0].exitSyncPoints != null ? new List<float>(loopGroup[0].exitSyncPoints) : new List<float>(),
+                    tags = loopGroup[0].tags != null ? new List<string>(loopGroup[0].tags) : new List<string>()
+                };
+
+                newLoops.Add(groupedLoop);
+                processedLoops.UnionWith(loopGroup);
+            }
+
+            // Add any remaining loops that weren't grouped
+            foreach (var loop in track.loops)
+            {
+                if (!processedLoops.Contains(loop))
+                {
+                    newLoops.Add(loop);
+                }
+            }
+
+            // Replace loops
+            track.loops = newLoops;
+
+            EditorUtility.SetDirty(track);
+            AnalyzeStems();
+
+            EditorUtility.DisplayDialog(
+                "Success",
+                $"Grouped stems successfully!\n\n" +
+                $"Created {groupedLoops.Count} multi-stem loops.",
+                "OK"
+            );
+
+            Debug.Log($"<color=green>✓ Auto-grouped stems: {processedLoops.Count} individual clips → {groupedLoops.Count} multi-stem loops</color>");
+        }
+
+        int GetStemPriority(string stemName)
+        {
+            stemName = stemName.ToLower();
+            
+            if (stemName.Contains("drum")) return 0;
+            if (stemName.Contains("kick")) return 1;
+            if (stemName.Contains("bass")) return 2;
+            if (stemName.Contains("rhythm")) return 3;
+            if (stemName.Contains("guitar")) return 4;
+            if (stemName.Contains("keys") || stemName.Contains("piano")) return 5;
+            if (stemName.Contains("lead")) return 6;
+            if (stemName.Contains("vocal")) return 7;
+            if (stemName.Contains("pad")) return 8;
+            if (stemName.Contains("fx")) return 9;
+            
+            return 100;
+        }
+
+        // ==================== VALIDATION ====================
+
+        void ValidateAllStems()
+        {
+            if (track.loops == null || track.loops.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Info", "No loops to validate.", "OK");
+                return;
+            }
+
+            int issueCount = 0;
+            System.Text.StringBuilder report = new System.Text.StringBuilder();
+            report.AppendLine("Stem Validation Report:\n");
+
+            for (int i = 0; i < track.loops.Count; i++)
+            {
+                var loop = track.loops[i];
+
+                if (!loop.useStems)
+                    continue;
+
+                if (loop.stems == null || loop.stems.Count == 0)
+                {
+                    report.AppendLine($"Loop {i}: useStems=true but no stems assigned!");
+                    issueCount++;
+                    continue;
+                }
+
+                // Check for null stems
+                int nullCount = loop.stems.Count(s => s == null);
+                if (nullCount > 0)
+                {
+                    report.AppendLine($"Loop {i}: {nullCount} null stem(s)!");
+                    issueCount++;
+                }
+
+                // Check duration consistency
+                if (loop.stems.Count > 1)
+                {
+                    float firstDuration = loop.stems[0]?.length ?? 0;
+                    bool allSameDuration = loop.stems.All(s => s != null && Mathf.Approximately(s.length, firstDuration));
+
+                    if (!allSameDuration)
+                    {
+                        report.AppendLine($"Loop {i}: Stems have different lengths! May cause desync.");
+                        issueCount++;
+                    }
+                }
+            }
+
+            if (issueCount == 0)
+            {
+                report.AppendLine("✓ All stems validated successfully!");
+            }
+            else
+            {
+                report.AppendLine($"\n⚠ Found {issueCount} issue(s)!");
+            }
+
+            EditorUtility.DisplayDialog("Validation Results", report.ToString(), "OK");
+            Debug.Log(report.ToString());
+        }
+
+        // ==================== MAGI OPERATIONS ====================
+
+        void GenerateAllSyncPoints()
+        {
+            if (track.loops == null || track.loops.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Info", "No loops to process.", "OK");
+                return;
+            }
+
+            Undo.RecordObject(track, "Generate All Sync Points");
+
+            int count = 0;
+            foreach (var loop in track.loops)
+            {
+                GenerateSyncPoints(loop);
+                count++;
+            }
+
+            EditorUtility.SetDirty(track);
+
+            EditorUtility.DisplayDialog("Success", $"Generated sync points for {count} loops.", "OK");
+            Debug.Log($"<color=green>✓ Generated sync points for {count} loops</color>");
+        }
+
+        void GenerateSyncPoints(LoopData loop)
+        {
+            float duration = loop.Duration;
+            if (duration <= 0)
+                return;
+
+            loop.exitSyncPoints = new List<float>();
+
+            float bpm = loop.bpm > 0 ? loop.bpm : track.defaultBPM;
+            float beatDuration = 60f / bpm;
+            float barDuration = beatDuration * 4;
+
+            float currentTime = barDuration;
+            while (currentTime < duration)
+            {
+                loop.exitSyncPoints.Add(currentTime);
+                currentTime += barDuration;
+            }
+
+            if (loop.exitSyncPoints.Count == 0 || loop.exitSyncPoints[loop.exitSyncPoints.Count - 1] != duration)
+            {
+                loop.exitSyncPoints.Add(duration);
+            }
+        }
+
+        void ClearAllSyncPoints()
+        {
+            if (track.loops == null || track.loops.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Info", "No loops to process.", "OK");
+                return;
+            }
+
+            bool confirmed = EditorUtility.DisplayDialog(
+                "Clear Sync Points",
+                "Clear all sync points from all loops?",
+                "Clear",
+                "Cancel"
+            );
+
+            if (!confirmed)
+                return;
+
+            Undo.RecordObject(track, "Clear All Sync Points");
+
+            foreach (var loop in track.loops)
+            {
+                loop.exitSyncPoints?.Clear();
+            }
+
+            EditorUtility.SetDirty(track);
+
+            Debug.Log("Cleared all sync points");
+        }
+
+        // ==================== SORTING ====================
+
+        void SortLoops()
+        {
+            if (track.loops == null || track.loops.Count == 0)
+                return;
+
+            Undo.RecordObject(track, "Sort Loops");
+
+            switch (currentSortMode)
+            {
+                case SortMode.Quality:
+                    track.loops = track.loops.OrderByDescending(l => l.quality).ToList();
+                    break;
+                case SortMode.Intensity:
+                    track.loops = track.loops.OrderBy(l => l.intensity).ToList();
+                    break;
+                case SortMode.Duration:
+                    track.loops = track.loops.OrderBy(l => l.Duration).ToList();
+                    break;
+                case SortMode.StemCount:
+                    track.loops = track.loops.OrderByDescending(l => l.useStems ? l.stems?.Count ?? 0 : 0).ToList();
+                    break;
+            }
+
+            EditorUtility.SetDirty(track);
+        }
+
+        // ==================== UTILITIES ====================
+
+        private Texture2D MakeTex(int width, int height, Color col)
+        {
+            Color[] pix = new Color[width * height];
+            for (int i = 0; i < pix.Length; i++)
+                pix[i] = col;
+
+            Texture2D result = new Texture2D(width, height);
+            result.SetPixels(pix);
+            result.Apply();
+            return result;
         }
     }
 }

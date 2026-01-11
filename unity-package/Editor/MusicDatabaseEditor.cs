@@ -1,268 +1,430 @@
-using System.Collections.Generic;
-using System.Linq;
-using UnityEditor;
 using UnityEngine;
+using UnityEditor;
+using System.Linq;
 
 namespace AdaptiveMusic.Editor
 {
+    /// <summary>
+    /// Custom editor for the MusicDatabase ScriptableObject.
+    /// Provides validation, statistics, and helpful tools.
+    /// </summary>
     [CustomEditor(typeof(MusicDatabase))]
     public class MusicDatabaseEditor : UnityEditor.Editor
     {
-        private SerializedProperty tracksProperty;
-        private int selectedTrackIndex = -1;
-        private List<double> tapTimes = new List<double>();
-        private AudioSource previewSource;
-        private bool isPlaying = false;
-        private double lastTapTime = 0;
-        private const int minTaps = 4;
-        private const int maxTaps = 16;
-        private Vector2 scrollPosition;
+        private MusicDatabase database;
+        private bool showStats = true;
+        private bool showTracks = true;
+        private bool showValidation = true;
 
-        void OnEnable()
+        private void OnEnable()
         {
-            tracksProperty = serializedObject.FindProperty("tracks");
-
-            // Create a temporary GameObject with AudioSource for preview
-            GameObject previewObj = GameObject.Find("_MusicDatabasePreview");
-            if (previewObj == null)
-            {
-                previewObj = new GameObject("_MusicDatabasePreview");
-                previewObj.hideFlags = HideFlags.HideAndDontSave;
-                previewSource = previewObj.AddComponent<AudioSource>();
-                previewSource.playOnAwake = false;
-            }
-            else
-            {
-                previewSource = previewObj.GetComponent<AudioSource>();
-            }
-        }
-
-        void OnDisable()
-        {
-            StopPreview();
+            database = target as MusicDatabase;
         }
 
         public override void OnInspectorGUI()
         {
-            serializedObject.Update();
+            // Draw default inspector
+            DrawDefaultInspector();
 
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Music Database", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "This database manages all your music tracks. Each track can contain multiple loops extracted by the Audio Loop Extractor tool.", 
-                MessageType.Info
-            );
+            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
             EditorGUILayout.Space();
 
-            // Statistics
-            MusicDatabase db = (MusicDatabase)target;
-            int totalLoops = 0;
-            foreach (var track in db.tracks)
+            // Statistics section
+            showStats = EditorGUILayout.Foldout(showStats, "Database Statistics", true);
+            if (showStats)
             {
-                if (track != null)
-                    totalLoops += track.loops.Count;
-            }
-            
-            EditorGUILayout.BeginHorizontal("box");
-            EditorGUILayout.LabelField($"Tracks: {db.tracks.Count}", EditorStyles.miniLabel);
-            EditorGUILayout.LabelField($"Total Loops: {totalLoops}", EditorStyles.miniLabel);
-            EditorGUILayout.EndHorizontal();
-            
-            EditorGUILayout.Space();
-
-            // Add new track button
-            if (GUILayout.Button("Add Track Reference", GUILayout.Height(30)))
-            {
-                tracksProperty.arraySize++;
-                serializedObject.ApplyModifiedProperties();
-            }
-
-            if (GUILayout.Button("Create New Track Asset", GUILayout.Height(30)))
-            {
-                CreateNewTrack();
+                DrawStatistics();
             }
 
             EditorGUILayout.Space();
 
-            // Scroll view for tracks
-            scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
-
-            // Display all tracks
-            for (int i = 0; i < tracksProperty.arraySize; i++)
+            // Tracks list section
+            showTracks = EditorGUILayout.Foldout(showTracks, "Tracks Overview", true);
+            if (showTracks)
             {
-                SerializedProperty trackProp = tracksProperty.GetArrayElementAtIndex(i);
-                
-                if (trackProp.objectReferenceValue == null)
+                DrawTracksOverview();
+            }
+
+            EditorGUILayout.Space();
+
+            // Validation section
+            showValidation = EditorGUILayout.Foldout(showValidation, "Validation", true);
+            if (showValidation)
+            {
+                DrawValidation();
+            }
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
+            EditorGUILayout.Space();
+
+            // Action buttons
+            DrawActionButtons();
+        }
+
+        private void DrawStatistics()
+        {
+            EditorGUI.indentLevel++;
+
+            if (database.tracks == null || database.tracks.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No tracks in database", MessageType.Info);
+                EditorGUI.indentLevel--;
+                return;
+            }
+
+            int totalTracks = database.tracks.Count;
+            int totalLoops = database.tracks.Sum(t => t != null && t.loops != null ? t.loops.Count : 0);
+            int loopsWithSyncPoints = 0;
+            int loopsWithTransitions = 0;
+            int loopsWithStems = 0;
+            float avgQuality = 0f;
+            int qualityCount = 0;
+
+            foreach (var track in database.tracks)
+            {
+                if (track?.loops == null) continue;
+
+                foreach (var loop in track.loops)
                 {
-                    // Empty slot
-                    EditorGUILayout.BeginVertical("box");
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.PropertyField(trackProp, new GUIContent($"Track {i + 1}"));
-                    if (GUILayout.Button("×", GUILayout.Width(25)))
-                    {
-                        tracksProperty.DeleteArrayElementAtIndex(i);
-                        serializedObject.ApplyModifiedProperties();
-                        continue;
-                    }
-                    EditorGUILayout.EndHorizontal();
-                    EditorGUILayout.EndVertical();
+                    if (loop == null) continue;
+
+                    if (loop.HasSyncPoints) loopsWithSyncPoints++;
+                    if (loop.HasTransitionOut) loopsWithTransitions++;
+                    if (loop.useStems && loop.stems.Count > 0) loopsWithStems++;
+                    
+                    avgQuality += loop.quality;
+                    qualityCount++;
+                }
+            }
+
+            if (qualityCount > 0)
+                avgQuality /= qualityCount;
+
+            EditorGUILayout.LabelField("Total Tracks:", totalTracks.ToString());
+            EditorGUILayout.LabelField("Total Loops:", totalLoops.ToString());
+            EditorGUILayout.LabelField("Average Quality:", $"{avgQuality:F2}");
+            
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("MAGI Features:", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+            EditorGUILayout.LabelField("Loops with Sync Points:", $"{loopsWithSyncPoints} ({(float)loopsWithSyncPoints / Mathf.Max(1, totalLoops) * 100:F1}%)");
+            EditorGUILayout.LabelField("Loops with Transitions:", $"{loopsWithTransitions} ({(float)loopsWithTransitions / Mathf.Max(1, totalLoops) * 100:F1}%)");
+            EditorGUILayout.LabelField("Loops with Stems:", $"{loopsWithStems} ({(float)loopsWithStems / Mathf.Max(1, totalLoops) * 100:F1}%)");
+            EditorGUI.indentLevel--;
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawTracksOverview()
+        {
+            EditorGUI.indentLevel++;
+
+            if (database.tracks == null || database.tracks.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No tracks in database", MessageType.Info);
+                EditorGUI.indentLevel--;
+                return;
+            }
+
+            foreach (var track in database.tracks)
+            {
+                if (track == null)
+                {
+                    EditorGUILayout.HelpBox("Null track reference!", MessageType.Error);
                     continue;
                 }
 
-                TrackData track = trackProp.objectReferenceValue as TrackData;
-                if (track == null) continue;
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-                EditorGUILayout.BeginVertical("box");
-
-                // Header with delete button
+                // Track header
                 EditorGUILayout.BeginHorizontal();
-                bool foldout = EditorGUILayout.Foldout(true, $"🎵 {track.displayName} ({track.loops.Count} loops)", true, EditorStyles.foldoutHeader);
+                EditorGUILayout.LabelField(track.displayName, EditorStyles.boldLabel);
                 
-                if (GUILayout.Button("Edit", GUILayout.Width(50)))
+                if (GUILayout.Button("Select", GUILayout.Width(60)))
                 {
                     Selection.activeObject = track;
                     EditorGUIUtility.PingObject(track);
                 }
-                
-                if (GUILayout.Button("×", GUILayout.Width(25)))
-                {
-                    tracksProperty.DeleteArrayElementAtIndex(i);
-                    serializedObject.ApplyModifiedProperties();
-                    if (selectedTrackIndex == i)
-                    {
-                        selectedTrackIndex = -1;
-                        StopPreview();
-                    }
-                    EditorGUILayout.EndVertical();
-                    continue;
-                }
                 EditorGUILayout.EndHorizontal();
 
-                if (foldout)
+                // Track info
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField("Key:", track.trackKey);
+                EditorGUILayout.LabelField("Loops:", track.loops != null ? track.loops.Count.ToString() : "0");
+                EditorGUILayout.LabelField("BPM:", track.defaultBPM.ToString("F0"));
+                
+                if (track.tags != null && track.tags.Count > 0)
                 {
-                    EditorGUI.indentLevel++;
-                    
-                    // Track info
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Key:", GUILayout.Width(80));
-                    EditorGUILayout.LabelField(track.key);
-                    EditorGUILayout.EndHorizontal();
-                    
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("BPM:", GUILayout.Width(80));
-                    EditorGUILayout.LabelField(track.bpm.ToString("F1"));
-                    EditorGUILayout.EndHorizontal();
-                    
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Crossfade:", GUILayout.Width(80));
-                    EditorGUILayout.LabelField($"{track.defaultCrossfade:F2}s");
-                    EditorGUILayout.EndHorizontal();
-
-                    // Loop preview
-                    if (track.loops.Count > 0)
-                    {
-                        EditorGUILayout.Space(5);
-                        EditorGUILayout.LabelField($"Loops ({track.loops.Count}):", EditorStyles.boldLabel);
-                        
-                        // Show first few loops
-                        int displayCount = Mathf.Min(3, track.loops.Count);
-                        for (int l = 0; l < displayCount; l++)
-                        {
-                            LoopData loop = track.loops[l];
-                            if (loop != null && loop.clip != null)
-                            {
-                                EditorGUILayout.BeginHorizontal("helpbox");
-                                EditorGUILayout.LabelField($"Loop {loop.index + 1}", GUILayout.Width(60));
-                                EditorGUILayout.LabelField($"{loop.duration:F1}s", GUILayout.Width(50));
-                                EditorGUILayout.LabelField($"Q: {loop.quality:F2}", GUILayout.Width(60));
-                                
-                                bool isThisLoopPlaying = isPlaying && selectedTrackIndex == i;
-                                string playLabel = isThisLoopPlaying ? "⬛" : "▶";
-                                if (GUILayout.Button(playLabel, GUILayout.Width(30)))
-                                {
-                                    if (isThisLoopPlaying)
-                                        StopPreview();
-                                    else
-                                        PlayPreview(loop.clip, i);
-                                }
-                                EditorGUILayout.EndHorizontal();
-                            }
-                        }
-                        
-                        if (track.loops.Count > displayCount)
-                        {
-                            EditorGUILayout.LabelField($"... and {track.loops.Count - displayCount} more", EditorStyles.miniLabel);
-                        }
-                    }
-                    else
-                    {
-                        EditorGUILayout.HelpBox("No loops. Use Tools > Adaptive Music > Loop Importer to add loops.", MessageType.Info);
-                    }
-
-                    EditorGUI.indentLevel--;
+                    EditorGUILayout.LabelField("Tags:", string.Join(", ", track.tags));
                 }
 
+                // Sync point info
+                if (track.loops != null)
+                {
+                    int syncCount = track.loops.Count(l => l != null && l.HasSyncPoints);
+                    if (syncCount > 0)
+                    {
+                        EditorGUILayout.LabelField("Sync Points:", $"{syncCount}/{track.loops.Count} loops");
+                    }
+                }
+
+                EditorGUI.indentLevel--;
                 EditorGUILayout.EndVertical();
-                EditorGUILayout.Space(5);
+                EditorGUILayout.Space();
             }
 
-            EditorGUILayout.EndScrollView();
-
-            serializedObject.ApplyModifiedProperties();
+            EditorGUI.indentLevel--;
         }
 
-        void CreateNewTrack()
+        private void DrawValidation()
         {
-            string path = EditorUtility.SaveFilePanelInProject(
-                "Create New Track",
-                "NewTrack",
-                "asset",
-                "Choose a location to save the TrackData"
+            EditorGUI.indentLevel++;
+
+            if (database.tracks == null || database.tracks.Count == 0)
+            {
+                EditorGUILayout.HelpBox("Database is empty", MessageType.Warning);
+                EditorGUI.indentLevel--;
+                return;
+            }
+
+            // Check for duplicate keys
+            var duplicateKeys = database.tracks
+                .Where(t => t != null)
+                .GroupBy(t => t.trackKey)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key);
+
+            if (duplicateKeys.Any())
+            {
+                EditorGUILayout.HelpBox(
+                    "Duplicate track keys found:\n" + string.Join(", ", duplicateKeys),
+                    MessageType.Error
+                );
+            }
+
+            // Check for null tracks
+            int nullCount = database.tracks.Count(t => t == null);
+            if (nullCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{nullCount} null track reference(s) found",
+                    MessageType.Error
+                );
+            }
+
+            // Check for empty track keys
+            int emptyKeyCount = database.tracks.Count(t => t != null && string.IsNullOrEmpty(t.trackKey));
+            if (emptyKeyCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{emptyKeyCount} track(s) with empty keys found",
+                    MessageType.Warning
+                );
+            }
+
+            // Check for tracks without loops
+            int emptyTrackCount = database.tracks.Count(t => t != null && (t.loops == null || t.loops.Count == 0));
+            if (emptyTrackCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{emptyTrackCount} track(s) without loops found",
+                    MessageType.Warning
+                );
+            }
+
+            // MAGI validation
+            int tracksWithoutSync = 0;
+            foreach (var track in database.tracks)
+            {
+                if (track?.loops == null) continue;
+                
+                bool hasAnySync = track.loops.Any(l => l != null && l.HasSyncPoints);
+                if (!hasAnySync && track.loops.Count > 0)
+                {
+                    tracksWithoutSync++;
+                }
+            }
+
+            if (tracksWithoutSync > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{tracksWithoutSync} track(s) without sync points (MAGI features disabled)",
+                    MessageType.Info
+                );
+            }
+
+            // Show success if all validations pass
+            if (!duplicateKeys.Any() && nullCount == 0 && emptyKeyCount == 0 && emptyTrackCount == 0)
+            {
+                EditorGUILayout.HelpBox("All validation checks passed!", MessageType.Info);
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        private void DrawActionButtons()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            if (GUILayout.Button("Validate Database"))
+            {
+                ValidateDatabase();
+            }
+
+            if (GUILayout.Button("Generate All Sync Points"))
+            {
+                GenerateAllSyncPoints();
+            }
+
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+
+            if (GUILayout.Button("Clean Null Tracks"))
+            {
+                CleanNullTracks();
+            }
+
+            if (GUILayout.Button("Log Statistics"))
+            {
+                LogStatistics();
+            }
+
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space();
+
+            // Danger zone
+            GUI.color = new Color(1f, 0.6f, 0.6f);
+            if (GUILayout.Button("Clear All Tracks (Cannot Undo!)"))
+            {
+                if (EditorUtility.DisplayDialog(
+                    "Clear All Tracks",
+                    "This will remove all tracks from the database. This cannot be undone!\n\nAre you sure?",
+                    "Yes, Clear All",
+                    "Cancel"))
+                {
+                    ClearAllTracks();
+                }
+            }
+            GUI.color = Color.white;
+        }
+
+        private void ValidateDatabase()
+        {
+            var errors = new System.Collections.Generic.List<string>();
+            bool isValid = database.ValidateDatabase(out errors);
+
+            if (isValid)
+            {
+                EditorUtility.DisplayDialog(
+                    "Validation Successful",
+                    $"Database validation passed!\n\n{database.tracks.Count} tracks validated.",
+                    "OK"
+                );
+            }
+            else
+            {
+                string errorMessage = "Database validation failed:\n\n" + string.Join("\n", errors);
+                EditorUtility.DisplayDialog("Validation Failed", errorMessage, "OK");
+                Debug.LogError("Database Validation Errors:\n" + string.Join("\n", errors));
+            }
+        }
+
+        private void GenerateAllSyncPoints()
+        {
+            if (database.tracks == null || database.tracks.Count == 0)
+            {
+                EditorUtility.DisplayDialog("Error", "No tracks in database", "OK");
+                return;
+            }
+
+            bool useBeats = EditorUtility.DisplayDialog(
+                "Generate Sync Points",
+                "Generate sync points for all loops in all tracks?\n\n" +
+                "Choose the sync point placement:",
+                "On Bars (Typical)",
+                "On Beats (More Frequent)"
             );
 
-            if (!string.IsNullOrEmpty(path))
+            int totalLoops = 0;
+            foreach (var track in database.tracks)
             {
-                TrackData newTrack = CreateInstance<TrackData>();
-                newTrack.key = System.IO.Path.GetFileNameWithoutExtension(path);
-                newTrack.displayName = newTrack.key;
-                newTrack.bpm = 120f;
-                newTrack.defaultCrossfade = 0.1f;
+                if (track?.loops == null) continue;
 
-                AssetDatabase.CreateAsset(newTrack, path);
-                AssetDatabase.SaveAssets();
-
-                // Add to database
-                tracksProperty.arraySize++;
-                tracksProperty.GetArrayElementAtIndex(tracksProperty.arraySize - 1).objectReferenceValue = newTrack;
-                serializedObject.ApplyModifiedProperties();
-
-                Selection.activeObject = newTrack;
-                EditorGUIUtility.PingObject(newTrack);
-            }
-        }
-
-        void PlayPreview(AudioClip clip, int index)
-        {
-            if (previewSource == null) return;
-
-            StopPreview();
-            selectedTrackIndex = index;
-            previewSource.clip = clip;
-            previewSource.Play();
-            isPlaying = true;
-
-            Repaint();
-        }
-
-        void StopPreview()
-        {
-            if (previewSource != null && previewSource.isPlaying)
-            {
-                previewSource.Stop();
+                track.GenerateAllSyncPoints(useBeats: !useBeats); // Dialog returns true for bars
+                totalLoops += track.loops.Count;
             }
 
-            isPlaying = false;
-            Repaint();
+            EditorUtility.SetDirty(database);
+            AssetDatabase.SaveAssets();
+
+            EditorUtility.DisplayDialog(
+                "Success",
+                $"Generated sync points for {totalLoops} loops across {database.tracks.Count} tracks\n\n" +
+                $"Mode: {(useBeats ? "Bar-based" : "Beat-based")}",
+                "OK"
+            );
+        }
+
+        private void CleanNullTracks()
+        {
+            if (database.tracks == null) return;
+
+            int nullCount = database.tracks.Count(t => t == null);
+            if (nullCount == 0)
+            {
+                EditorUtility.DisplayDialog("Info", "No null tracks found", "OK");
+                return;
+            }
+
+            database.tracks.RemoveAll(t => t == null);
+            EditorUtility.SetDirty(database);
+            AssetDatabase.SaveAssets();
+
+            EditorUtility.DisplayDialog("Success", $"Removed {nullCount} null track reference(s)", "OK");
+        }
+
+        private void LogStatistics()
+        {
+            if (database.tracks == null || database.tracks.Count == 0)
+            {
+                Debug.Log("Database is empty");
+                return;
+            }
+
+            int totalLoops = database.tracks.Sum(t => t?.loops?.Count ?? 0);
+            int loopsWithSync = 0;
+            int loopsWithTransitions = 0;
+
+            foreach (var track in database.tracks)
+            {
+                if (track?.loops == null) continue;
+
+                foreach (var loop in track.loops)
+                {
+                    if (loop == null) continue;
+                    if (loop.HasSyncPoints) loopsWithSync++;
+                    if (loop.HasTransitionOut) loopsWithTransitions++;
+                }
+            }
+
+            Debug.Log($"=== Music Database Statistics ===\n" +
+                     $"Tracks: {database.tracks.Count}\n" +
+                     $"Total Loops: {totalLoops}\n" +
+                     $"Loops with Sync Points: {loopsWithSync} ({(float)loopsWithSync / Mathf.Max(1, totalLoops) * 100:F1}%)\n" +
+                     $"Loops with Transitions: {loopsWithTransitions} ({(float)loopsWithTransitions / Mathf.Max(1, totalLoops) * 100:F1}%)");
+        }
+
+        private void ClearAllTracks()
+        {
+            database.tracks.Clear();
+            EditorUtility.SetDirty(database);
+            AssetDatabase.SaveAssets();
+
+            Debug.Log("All tracks cleared from database");
         }
     }
 }
