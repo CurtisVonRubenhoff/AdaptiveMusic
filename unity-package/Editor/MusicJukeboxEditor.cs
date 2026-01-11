@@ -779,7 +779,8 @@ namespace AdaptiveMusic.Editor
             GUIStyle stemNameStyle = new GUIStyle(EditorStyles.label);
             stemNameStyle.normal.textColor = stemMutes[stemIndex] ? mutedText : Color.white;
             GUILayout.Label($"{stemIndex:D2}", stemNameStyle, GUILayout.Width(25));
-            GUILayout.Label(stem.stemName, stemNameStyle, GUILayout.Width(120));
+            var stemLabel = stem.stemName.Substring(stem.stemName.LastIndexOf('_') + 1);
+            GUILayout.Label(stemLabel, stemNameStyle, GUILayout.Width(120));
 
             // Mute button
             bool isMuted = stemMutes[stemIndex];
